@@ -1,0 +1,21 @@
+---
+name: openQA - GitHub action example
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+env:
+  OPENQA_TOKEN: ${{ secrets.OPENQA_API_USER }}:${{ secrets.OPENQA_API_KEY }}:${{ secrets.OPENQA_API_SECRET }}
+  OPENQA_HOST: ${{ secrets.OPENQA_URL }}
+
+jobs:
+  trigger_and_monitor_openqa:
+    runs-on: ubuntu-latest
+    container:
+      image: registry.opensuse.org/home/okurz/container/ca/containers/tumbleweed:curl-jq-ssh-git
+    steps:
+      - uses: actions/checkout@v3
+      - name: Trigger and monitor openQA test
+        run: tools/trigger-openqa-jobs

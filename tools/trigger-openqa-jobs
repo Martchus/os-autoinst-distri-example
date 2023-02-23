@@ -1,0 +1,68 @@
+#!/bin/bash
+set -o pipefail
+set -e
+
+repo_ref=$GITHUB_REPOSITORY.git#$GITHUB_REF
+jobs_api=$OPENQA_HOST/api/v1/jobs
+isos_api=$OPENQA_HOST/api/v1/isos
+
+# define basic job settings to be passed as curl params
+post_params=(
+    -d "CASEDIR=${CASEDIR:-$GITHUB_SERVER_URL/$repo_ref}"
+    -d "NEEDLES_DIR=${NEEDLES_DIR:-%25%25CASEDIR%25%25/needles}"
+    -d "BUILD=${BUILD:-$repo_ref}"
+    -d "DISTRI=${DISTRI:-example}"
+    -d "GROUP_ID=${GROUP_ID:-0}"
+)
+
+# post jobs as "scheduled product" if scenario definitions are present; otherwise just post a single job
+scenario_defs_file=scenaio-definitions.yaml
+if [[ -f $scenario_defs_file ]]; then
+    post_params+=(
+        -d "VERSION=${VERSION:-0}"
+        -d "FLAVOR=${FLAVOR:-DVD}"
+        -d "ARCH=${ARCH:-x86_64}"
+        -d "TEST=${TEST:-simple_boot}"
+        --data-urlencode "SCENARIO_DEFINITIONS_YAML@$scenario_defs_file"
+        "$isos_api"
+    )
+else
+    post_params+=(
+        -d "TEST=${TEST:-test-$GITHUB_EVENT_NAME-$repo_ref}"
+        "$jobs_api"
+    )
+fi
+
+# invoke curl
+echo "Parameters for job creation: ${post_params[@]}"
+post=$(curl -sS -u "$OPENQA_TOKEN" -X POST "${post_params[@]}") || echo "Unable to POST jobs"
+
+# read job IDs (isos post will return an array of jobs, jobs post will return a single ID)
+job_ids=($(echo "$post" | jq -r '[.id, .ids] | flatten | join(" ")')) || echo "Got invalid response from POST"
+[[ "${#job_ids[*]}" == 0 ]] && echo "POST returned no job IDs, only got: $post" && exit 1
+echo "Posted job with IDs: ${job_ids[*]}"
+
+# wait until the jobs are done/cancelled gathering the jobs' results
+job_results=()
+while [ "${#job_results[*]}" -lt "${#job_ids[*]}" ]; do
+    job_id=${job_ids[${#job_results[*]}]}
+    job=$jobs_api/$job_id
+    while true; do
+        job_info=$(curl -sS "$job")
+        job_state=$(echo "$job_info" | jq -r .job.state)
+        if [[ $job_state == 'done' ]] || [[ $job_state == 'cancelled' ]]; then
+            job_result=$(echo "$job_info" | jq -r '.job.result')
+            job_results+=("$job_result")
+            echo "Job ID $job_id is '$job_state' with result '$job_result'"
+            break
+        fi
+        echo "Job state of job ID $job_id: $job_state, waiting…"
+        sleep 10
+    done
+done
+
+# exit with non-zero exit code if at least one job did not pass/softfail
+for job_result in "${job_results[*]}" ; do
+    [[ $job_result != 'passed' ]] && [[ $job_result != 'softfailed' ]] && exit 10
+done
+exit 0
