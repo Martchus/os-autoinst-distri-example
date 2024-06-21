@@ -8,6 +8,8 @@ sub run {
     # wait for bootloader to appear
     assert_screen 'bootloader';
 
+    assert_screen 'need-yet-another-needle';
+
     # conclude test early if there's no boot media
     return undef if match_has_tag 'no-boot-media';
 
